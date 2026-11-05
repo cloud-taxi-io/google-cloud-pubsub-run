@@ -21,12 +21,12 @@ def get_engine() -> Engine:
 
 
 @lru_cache
-def get_session_factory() -> sessionmaker[Session]:
+def get_session_factory() -> sessionmaker[Session]:  # pylint: disable=unsubscriptable-object
     return sessionmaker(bind=get_engine(), autoflush=False, expire_on_commit=False)
 
 
 def get_db() -> Iterator[Session]:
-    """FastAPI dependency: one session per request, rolled back on error."""
+    """Yield one database session per request (FastAPI dependency), rolled back on error."""
     session = get_session_factory()()
     try:
         yield session

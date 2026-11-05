@@ -1,0 +1,65 @@
+[project]
+name = "vtc-api"
+version = "1.0.0"
+requires-python = ">=3.12"
+
+# ---------------------------------------------------------------- mypy
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["firebase_admin.*", "google.*"]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+
+# ---------------------------------------------------------------- pylint
+[tool.pylint.main]
+py-version = "3.12"
+load-plugins = []
+
+[tool.pylint.format]
+max-line-length = 120
+
+[tool.pylint.design]
+max-args = 7
+max-positional-arguments = 5
+
+[tool.pylint."messages control"]
+disable = [
+  # Docstrings are checked by pydocstyle (format of the docstrings that exist).
+  "missing-module-docstring",
+  "missing-class-docstring",
+  "missing-function-docstring",
+  # Pydantic models, Protocols and small services legitimately have few methods.
+  "too-few-public-methods",
+  # Known false positive with sqlalchemy.func (func.now(), func.count()).
+  "not-callable",
+]
+
+# ---------------------------------------------------------------- pydocstyle
+[tool.pydocstyle]
+convention = "google"
+# Missing docstrings are allowed (D1xx); the docstrings we write must follow the convention.
+add-ignore = "D100,D101,D102,D103,D104,D105,D107"
+
+# ---------------------------------------------------------------- coverage
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 80
+exclude_also = ["pragma: no cover", "if __name__ == .__main__.:", "raise NotImplementedError"]
+
+# ---------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

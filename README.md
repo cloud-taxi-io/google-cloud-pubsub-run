@@ -144,3 +144,46 @@ Non automatisé dans ce dépôt. Points à régler côté infrastructure (dépô
 2. **Cloud Run public** (`--allow-unauthenticated`) : l'app mobile envoie un jeton Firebase, pas un jeton IAM. La sécurité repose alors sur la vérification du JWT et sur le RBAC, et `/pubsub/push` sur le jeton OIDC (`PUBSUB_AUDIENCE` = URL du service, `PUBSUB_SERVICE_ACCOUNT` = `pubsub-invoker@...`).
 3. **Migrations** dans un Cloud Run job (`alembic upgrade head`) avant chaque déploiement.
 4. Subscription push vers `<URL>/pubsub/push` (l'ancien chemin `/` reste accepté).
+
+## CI : Cloud Build
+
+Pipeline : `cloudbuild.yaml`. Il reprend les étapes de l'ancien Jenkinsfile, adaptées à Google Cloud :
+
+| Étape | Jenkins | Cloud Build |
+|---|---|---|
+| Dépendances | `pipenv install --dev` | `pip install -r requirements-dev.txt` (venv partagé dans `/workspace`) |
+| Analyse statique | pydocstyle, mypy, pylint | idem, **en parallèle** (config dans `pyproject.toml`) |
+| Base de test | Helm TimescaleDB sur Kubernetes | conteneur `timescale/timescaledb-ha:pg17` (PostGIS + TimescaleDB) sur le réseau `cloudbuild` |
+| RabbitMQ | Helm | inutile : l'API utilise Pub/Sub, simulé dans les tests |
+| Tests | `coverage run -m pytest --junit-xml` | idem ; échec si couverture < 80 % ; `reports/report.xml` + `reports/coverage.xml` |
+| SonarQube + Quality Gate | `withSonarQubeEnv` / `waitForQualityGate` | `sonar-scanner -Dsonar.qualitygate.wait=true`, **optionnel** (`_SONAR_ENABLED=true`) |
+| Image | `docker build` | `docker build` + **smoke test** de l'image contre la base de test |
+| Publication | Docker Hub, branches `production\|master\|develop` | **Artifact Registry**, branches `production` (`prod`), `main` (`staging`), `develop` (`dev`) |
+
+Tags publiés : `<SHORT_SHA>` + `<env>` (et `prod-<BUILD_ID>` pour `production`). Les PR et autres branches sont testées mais rien n'est publié.
+
+Lancer à la main (rien n'est publié) :
+
+```bash
+gcloud builds submit --config cloudbuild.yaml .
+```
+
+Les fichiers locaux sensibles (`MOBILE-CONFIG.md`, `google-services.json`, `.env`) sont exclus de l'envoi par `.gcloudignore`.
+
+**Déclencheur GitHub** (une fois) : Cloud Build → Déclencheurs → connecter le dépôt `cloud-taxi-io/google-cloud-pubsub-run`
+(installation de l'application GitHub Cloud Build, à faire dans la console), puis :
+
+```bash
+gcloud builds triggers create github --name=vtc-api-ci --region=global \
+  --repo-owner=cloud-taxi-io --repo-name=google-cloud-pubsub-run \
+  --branch-pattern='.*' --build-config=cloudbuild.yaml
+gcloud builds triggers create github --name=vtc-api-pr --region=global \
+  --repo-owner=cloud-taxi-io --repo-name=google-cloud-pubsub-run \
+  --pull-request-pattern='.*' --build-config=cloudbuild.yaml
+```
+
+**SonarQube** : créer le secret `sonar-token` dans Secret Manager, donner `roles/secretmanager.secretAccessor` au compte de service de Cloud Build,
+et définir `_SONAR_ENABLED=true` et `_SONAR_HOST_URL=https://...` sur le déclencheur.
+
+**Notifications Discord** : Cloud Build n'exécute plus d'étape après un échec. Pour être prévenu des échecs, utiliser un
+[Cloud Build notifier](https://cloud.google.com/build/docs/configuring-notifications/notifiers) (Pub/Sub `cloud-builds`) avec le webhook Discord stocké dans Secret Manager.

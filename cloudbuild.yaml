@@ -1,0 +1,196 @@
+# CI pipeline (Cloud Build) for the VTC API.
+#
+#   1. Install dependencies           (in parallel with) start PostgreSQL + PostGIS + TimescaleDB
+#   2. Static analysis: pydocstyle, mypy, pylint (in parallel)
+#   3. Integration tests + coverage (junit + coverage.xml in reports/)
+#   4. SonarQube analysis + quality gate (optional, _SONAR_ENABLED=true)
+#   5. Build the Docker image and smoke-test it against the test database
+#   6. Push to Artifact Registry, only for main / develop / production
+#
+# Run by hand:  gcloud builds submit --config cloudbuild.yaml .
+# Secrets are read from Secret Manager at run time, never stored in the repo.
+
+substitutions:
+  _REGION: europe-west1
+  _AR_REPO: cloud-run-source-deploy
+  _IMAGE_NAME: vtc-api
+  _PYTHON_IMAGE: python:3.12-slim
+  _TEST_DB_IMAGE: timescale/timescaledb-ha:pg17
+  # SonarQube: set _SONAR_ENABLED=true and _SONAR_HOST_URL on the trigger, and store the token
+  # in Secret Manager under the name given by _SONAR_TOKEN_SECRET.
+  _SONAR_ENABLED: "false"
+  _SONAR_HOST_URL: ""
+  _SONAR_TOKEN_SECRET: sonar-token
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  dynamicSubstitutions: true
+  env:
+    - VENV=/workspace/.venv
+    - PIP_DISABLE_PIP_VERSION_CHECK=1
+    - PIP_NO_CACHE_DIR=1
+
+timeout: 1800s
+
+steps:
+  # ------------------------------------------------------------------ setup (in parallel)
+  - id: start-test-db
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["-"]
+    args:
+      - run
+      - --detach
+      - --network=cloudbuild
+      - --name=testdb
+      - --env=POSTGRES_PASSWORD=test
+      - ${_TEST_DB_IMAGE}
+
+  - id: install
+    name: ${_PYTHON_IMAGE}
+    waitFor: ["-"]
+    entrypoint: bash
+    args:
+      - -euo
+      - pipefail
+      - -c
+      - |
+        python -m venv "$$VENV"
+        "$$VENV/bin/pip" install --quiet -r requirements-dev.txt
+        "$$VENV/bin/pip" freeze > /workspace/pip-freeze.txt
+
+  # ------------------------------------------------------------------ static analysis (in parallel)
+  - id: pydocstyle
+    name: ${_PYTHON_IMAGE}
+    waitFor: [install]
+    entrypoint: bash
+    args: [-c, '"$$VENV/bin/pydocstyle" app']
+
+  - id: mypy
+    name: ${_PYTHON_IMAGE}
+    waitFor: [install]
+    entrypoint: bash
+    args: [-c, '"$$VENV/bin/mypy" -p app --no-incremental']
+
+  - id: pylint
+    name: ${_PYTHON_IMAGE}
+    waitFor: [install]
+    entrypoint: bash
+    args: [-c, '"$$VENV/bin/pylint" app --output-format=parseable']
+
+  # ------------------------------------------------------------------ integration tests
+  - id: wait-test-db
+    name: gcr.io/cloud-builders/docker
+    waitFor: [start-test-db]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        # The image restarts PostgreSQL once after initdb: require 3 successes in a row.
+        ok=0
+        for i in $$(seq 1 90); do
+          if docker exec testdb psql -U postgres -tAc 'SELECT 1' >/dev/null 2>&1; then
+            ok=$$((ok + 1)); [ "$$ok" -ge 3 ] && echo "database ready" && exit 0
+          else
+            ok=0
+          fi
+          sleep 2
+        done
+        echo "database did not start"; docker logs testdb | tail -50; exit 1
+
+  - id: tests
+    name: ${_PYTHON_IMAGE}
+    waitFor: [install, wait-test-db]
+    entrypoint: bash
+    env:
+      - TEST_DATABASE_URL=postgresql+psycopg://postgres:test@testdb:5432/postgres
+    args:
+      - -euo
+      - pipefail
+      - -c
+      - |
+        mkdir -p reports
+        "$$VENV/bin/coverage" run -m pytest -v --junit-xml=reports/report.xml
+        "$$VENV/bin/coverage" xml -o reports/coverage.xml
+        "$$VENV/bin/coverage" report
+
+  # ------------------------------------------------------------------ SonarQube (optional)
+  - id: sonar-token
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    waitFor: [tests]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ "${_SONAR_ENABLED}" != "true" ]; then echo "SonarQube disabled"; exit 0; fi
+        gcloud secrets versions access latest --secret="${_SONAR_TOKEN_SECRET}" > /workspace/.sonar_token
+
+  - id: sonar
+    name: sonarsource/sonar-scanner-cli:11
+    waitFor: [sonar-token]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        if [ "${_SONAR_ENABLED}" != "true" ]; then echo "SonarQube disabled"; exit 0; fi
+        # Coverage paths were written in the Python container (/workspace)
+        sonar-scanner \
+          -Dsonar.host.url="${_SONAR_HOST_URL}" \
+          -Dsonar.token="$$(cat /workspace/.sonar_token)" \
+          -Dsonar.scm.revision="${COMMIT_SHA}" \
+          -Dsonar.qualitygate.wait=true \
+          -Dsonar.qualitygate.timeout=300
+
+  # ------------------------------------------------------------------ image
+  - id: build-image
+    name: gcr.io/cloud-builders/docker
+    waitFor: [pydocstyle, mypy, pylint, tests, sonar]
+    args:
+      - build
+      - --tag=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:${BUILD_ID}
+      - --label=org.opencontainers.image.revision=${COMMIT_SHA}
+      - .
+
+  - id: smoke-test-image
+    name: gcr.io/cloud-builders/docker
+    waitFor: [build-image]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        docker run --detach --network=cloudbuild --name=api \
+          -e DATABASE_URL=postgresql+psycopg://postgres:test@testdb:5432/postgres \
+          -e PUBSUB_VERIFY_OIDC=false -e PORT=8080 \
+          ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}:${BUILD_ID}
+        for i in $$(seq 1 30); do
+          if docker run --rm --network=cloudbuild curlimages/curl:8.11.1 -fsS http://api:8080/readyz; then break; fi
+          sleep 2
+        done
+        code=$$(docker run --rm --network=cloudbuild curlimages/curl:8.11.1 -s -o /dev/null -w '%{http_code}' http://api:8080/v1/me)
+        docker logs api | tail -20
+        [ "$$code" = "401" ] || { echo "expected 401 without token, got $$code"; exit 1; }
+        echo "smoke test OK"
+
+  # ------------------------------------------------------------------ publish (main / develop / production)
+  - id: push-image
+    name: gcr.io/cloud-builders/docker
+    waitFor: [smoke-test-image]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        case "${BRANCH_NAME}" in
+          production) env_name=prod ;;
+          main)       env_name=staging ;;
+          develop)    env_name=dev ;;
+          *) echo "branch '${BRANCH_NAME}': not published"; exit 0 ;;
+        esac
+        image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_AR_REPO}/${_IMAGE_NAME}
+        tags="${SHORT_SHA} $$env_name"
+        [ "${BRANCH_NAME}" = "production" ] && tags="$$tags $$env_name-${BUILD_ID}"
+        for tag in $$tags; do
+          docker tag "$$image:${BUILD_ID}" "$$image:$$tag"
+          docker push "$$image:$$tag"
+        done
+        echo "published $$image: $$tags"
