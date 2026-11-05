@@ -23,7 +23,8 @@ class LocationPublisher(Protocol):
 
 class PubSubLocationPublisher:
     def __init__(self, settings: Settings) -> None:
-        from google.cloud import pubsub_v1  # imported lazily: optional at runtime
+        # Imported lazily: only needed when a topic is configured.
+        from google.cloud import pubsub_v1  # pylint: disable=import-outside-toplevel
 
         if not settings.gcp_project_id or not settings.locations_topic:
             raise RuntimeError("GCP_PROJECT_ID and LOCATIONS_TOPIC are required to publish locations")
@@ -65,8 +66,8 @@ class LocationService:
 
     def nearby(self, latitude: float, longitude: float, radius_m: int, limit: int) -> list[NearbyDriver]:
         return self.repo.nearby(
-            latitude,
-            longitude,
+            latitude=latitude,
+            longitude=longitude,
             radius_m=min(radius_m, self.settings.nearby_max_radius_m),
             freshness_seconds=self.settings.nearby_freshness_seconds,
             limit=min(limit, self.settings.nearby_max_results),

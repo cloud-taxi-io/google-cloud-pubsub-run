@@ -68,7 +68,10 @@ def pubsub_push(
         inserted = service.store(payload.driver_id, payload.points)
     except IntegrityError:
         service.db.rollback()
-        logger.warning("dropped location message for unknown driver", extra={**log, "driver_id": str(payload.driver_id)})
+        logger.warning(
+            "dropped location message for unknown driver",
+            extra={**log, "driver_id": str(payload.driver_id)},
+        )
         return _ack()
 
     logger.info(

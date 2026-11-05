@@ -142,7 +142,10 @@ class RbacService:
         if permission not in role.permissions:
             role.permissions.append(permission)
             self.db.commit()
-            logger.info("permission granted", extra={"actor": str(actor.user_id), "role": role_name, "permission": code})
+            logger.info(
+                "permission granted",
+                extra={"actor": str(actor.user_id), "role": role_name, "permission": code},
+            )
         self.db.refresh(role)
         return role
 
@@ -154,7 +157,10 @@ class RbacService:
         if permission in role.permissions:
             role.permissions.remove(permission)
             self.db.commit()
-            logger.info("permission revoked", extra={"actor": str(actor.user_id), "role": role_name, "permission": code})
+            logger.info(
+                "permission revoked",
+                extra={"actor": str(actor.user_id), "role": role_name, "permission": code},
+            )
         self.db.refresh(role)
         return role
 

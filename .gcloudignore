@@ -1,0 +1,15 @@
+# Files NOT uploaded by `gcloud builds submit`
+.git
+.gitignore
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+reports/
+.env
+
+# Local project config, never upload
+MOBILE-CONFIG.md
+google-services.json

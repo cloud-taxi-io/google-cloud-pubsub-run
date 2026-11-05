@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import text
+from sqlalchemy import CursorResult, text
 from sqlalchemy.orm import Session
 
 from app.schemas.location import LocationOut, LocationPoint, NearbyDriver
@@ -78,13 +79,13 @@ class LocationRepository:
     def save_points(self, driver_id: uuid.UUID, points: list[LocationPoint]) -> int:
         """Idempotent: re-delivered points (same driver + timestamp) are ignored."""
         rows = [{"driver_id": driver_id, **p.model_dump()} for p in points]
-        result = self.db.execute(_INSERT_HISTORY, rows)
+        result = cast(CursorResult[Any], self.db.execute(_INSERT_HISTORY, rows))
         latest = max(points, key=lambda p: p.recorded_at)
         self.db.execute(_UPSERT_LAST, {"driver_id": driver_id, **latest.model_dump()})
-        return result.rowcount if result.rowcount is not None and result.rowcount >= 0 else len(rows)
+        return result.rowcount if result.rowcount >= 0 else len(rows)
 
     def nearby(
-        self, latitude: float, longitude: float, radius_m: int, freshness_seconds: int, limit: int
+        self, *, latitude: float, longitude: float, radius_m: int, freshness_seconds: int, limit: int
     ) -> list[NearbyDriver]:
         rows = self.db.execute(
             _NEARBY,

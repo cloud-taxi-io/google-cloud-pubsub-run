@@ -80,8 +80,10 @@ class PubSubPushVerifier:
         self._audience = settings.pubsub_audience
         self._service_account = settings.pubsub_service_account
         if self._enabled and not (self._audience and self._service_account):
-            raise RuntimeError("PUBSUB_AUDIENCE and PUBSUB_SERVICE_ACCOUNT are required when PUBSUB_VERIFY_OIDC is true")
-        self._request = google_requests.Request()
+            raise RuntimeError(
+                "PUBSUB_AUDIENCE and PUBSUB_SERVICE_ACCOUNT are required when PUBSUB_VERIFY_OIDC is true"
+            )
+        self._request = google_requests.Request()  # type: ignore[no-untyped-call]
 
     def verify(self, authorization_header: str | None) -> None:
         if not self._enabled:
@@ -90,7 +92,9 @@ class PubSubPushVerifier:
             raise InvalidTokenError("missing bearer token")
         token = authorization_header.removeprefix("Bearer ")
         try:
-            claims = google_id_token.verify_oauth2_token(token, self._request, audience=self._audience)
+            claims = google_id_token.verify_oauth2_token(  # type: ignore[no-untyped-call]
+                token, self._request, audience=self._audience
+            )
         except ValueError as exc:
             raise InvalidTokenError("invalid OIDC token") from exc
         if claims.get("email") != self._service_account or not claims.get("email_verified"):

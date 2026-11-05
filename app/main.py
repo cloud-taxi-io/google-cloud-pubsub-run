@@ -18,7 +18,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
 
-    app = FastAPI(
+    application = FastAPI(
         title=settings.app_name,
         version="1.0.0",
         docs_url="/docs" if settings.enable_docs else None,
@@ -26,14 +26,14 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if settings.enable_docs else None,
     )
 
-    @app.exception_handler(DomainError)
+    @application.exception_handler(DomainError)
     async def domain_error_handler(_: Request, exc: DomainError) -> JSONResponse:
         code = _STATUS_BY_ERROR.get(type(exc), status.HTTP_400_BAD_REQUEST)
         return JSONResponse(status_code=code, content={"detail": str(exc)})
 
     for router in (health.router, me.router, locations.router, admin.router, pubsub.router):
-        app.include_router(router)
-    return app
+        application.include_router(router)
+    return application
 
 
 app = create_app()
