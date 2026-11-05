@@ -5,3 +5,8 @@ venv/
 .env
 *.json.key
 .gcloud/
+.pytest_cache/
+
+# Local files with project config, never commit
+MOBILE-CONFIG.md
+google-services.json
