@@ -1,0 +1,7 @@
+-r requirements.txt
+pytest==8.3.4
+httpx==0.28.1
+coverage[toml]==7.6.10
+mypy==1.13.0
+pylint==3.3.3
+pydocstyle[toml]==6.3.0
